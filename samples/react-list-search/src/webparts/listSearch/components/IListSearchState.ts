@@ -1,6 +1,7 @@
-import { IColumn } from 'office-ui-fabric-react';
+import { IColumn, ITag } from 'office-ui-fabric-react';
 import IResult from '../model/IResult';
 import { SharePointType } from '../model/ISharePointFieldTypes';
+import { IFilter } from './IFilter';
 
 export interface IListSearchState {
   isLoading: boolean;
@@ -17,6 +18,10 @@ export interface IListSearchState {
   completeModalItemData: IResult;
   groupedItems: IGroupedItems[];
   columns: IColumn[];
+  showFilterPanel: boolean;
+  filterPanelHeaderText: string;
+  filterColumnData: IFilter[];
+  filterSuggestedTags: ITag[];
 }
 
 export default interface IGroupedItems {

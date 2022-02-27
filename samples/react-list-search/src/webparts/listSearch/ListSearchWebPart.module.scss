@@ -1,6 +1,18 @@
 @import '~@microsoft/sp-office-ui-fabric-core/dist/sass/SPFabricCore.scss';
 .listSearch {
 	@include ms-Grid;
+	.floatContainer {
+		padding: 2px;
+	}
+	
+	.floatChild {
+		float: left;
+	}  
+	.filterButton{
+		float: left;
+		border: none;
+    	background: none;
+	}
 	.row {
 		@include ms-Grid-row;
 	}

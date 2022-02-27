@@ -17,10 +17,23 @@ import {
 import {
   getTheme,
   IconButton,
-  MessageBar,
-  MessageBarType,
-  ShimmeredDetailsList
+  ShimmeredDetailsList,
 } from 'office-ui-fabric-react';
+import {Panel, Checkbox, mergeStyles, MessageBar, MessageBarType} from '@fluentui/react';
+import { TagPicker, TagPickerBase, IBasePicker, ITag, IInputProps, IBasePickerSuggestionsProps } from '@fluentui/react/lib/Pickers';
+import {
+  IDocumentCardActionsProps,
+  IDocumentCardPreviewProps,
+  IDocumentCardProps,
+  IDocumentCardTitleProps,
+  IDocumentCardActivityProps,
+  DocumentCard,
+  DocumentCardActions,
+  DocumentCardActivity,
+  DocumentCardLocation,
+  DocumentCardPreview,
+  DocumentCardTitle,
+} from '@fluentui/react/lib/DocumentCard';
 import { SearchBox } from 'office-ui-fabric-react/lib/SearchBox';
 import Pagination from "react-js-pagination";
 import { IReadonlyTheme } from '@microsoft/sp-component-base';
@@ -47,10 +60,13 @@ import IResult from '../model/IResult';
 import { IListSearchListQuery, IMapQuery } from '../model/IMapQuery';
 import { WebPartTitle } from "@pnp/spfx-controls-react/lib/WebPartTitle";
 import GraphService from '../services/GraphService';
-
+import { IFilter, IFilterItem } from './IFilter';
+import { forEach } from 'lodash';
+import * as _ from 'lodash';
 
 const LOG_SOURCE = "IListdSearchWebPart";
 const filterIcon: IIconProps = { iconName: 'Filter' };
+const ignoreFiltersFor: any = [SharePointType.FileIcon, SharePointType.Note, SharePointType.NoteFullHtml];
 
 export default class IListdSearchWebPart extends React.Component<IListSearchProps, IListSearchState> {
   private groups: IGroup[];
@@ -73,7 +89,11 @@ export default class IListdSearchWebPart extends React.Component<IListSearchProp
       selectedItem: null,
       completeModalItemData: null,
       columns: this.AddColumnsToDisplay(),
-      groupedItems: []
+      groupedItems: [],
+      showFilterPanel: false,
+      filterPanelHeaderText: "",
+      filterColumnData: [],
+      filterSuggestedTags: []
     };
     this.GetJSXElementByType = this.GetJSXElementByType.bind(this);
     this._renderItemColumn = this._renderItemColumn.bind(this);
@@ -125,7 +145,7 @@ export default class IListdSearchWebPart extends React.Component<IListSearchProp
         filteredItems = this.filterListItemsByGeneralFilter(this.props.generalFilterText, false, false, result, filteredItems);
       }
 
-      this.setState({ items: result, filterItems: filteredItems, isLoading: false, groupedItems });
+      this.setState({ items: result, filterItems: filteredItems, isLoading: false, groupedItems, showFilterPanel: false, filterPanelHeaderText: "" });
     } catch (error) {
       this.SetError(error, "getData");
     }
@@ -162,7 +182,17 @@ export default class IListdSearchWebPart extends React.Component<IListSearchProp
     let columns: IColumn[] = [];
     this.props.detailListFieldsCollectionData.sort().map(column => {
       let mappingType = this.props.mappingFieldsCollectionData.find(e => e.TargetField === column.ColumnTitle);
-      columns.push({ key: column.ColumnTitle, name: column.ColumnTitle, fieldName: column.ColumnTitle, minWidth: column.MinColumnWidth || 50, maxWidth: column.MaxColumnWidth, isResizable: true, data: mappingType ? mappingType.SPFieldType : (column.IsFileIcon ? SharePointType.FileIcon : SharePointType.Text), onColumnClick: this._onColumnClick, isIconOnly: column.IsFileIcon });
+      columns.push(
+        {
+          key: column.ColumnTitle,
+          name: column.ColumnTitle,
+          fieldName: column.ColumnTitle,
+          minWidth: column.MinColumnWidth || 50,
+          maxWidth: column.MaxColumnWidth,
+          isResizable: true,
+          data: mappingType ? mappingType.SPFieldType : (column.IsFileIcon ? SharePointType.FileIcon : SharePointType.Text),
+          onColumnClick: this._onColumnClick, isIconOnly: column.IsFileIcon
+        });
     });
 
     return columns;
@@ -322,14 +352,31 @@ export default class IListdSearchWebPart extends React.Component<IListSearchProp
 
 
   private _onRenderDetails(detailsFooterProps: IDetailsFooterProps, showSearchBox: boolean, isHeader: boolean): JSX.Element {
+    console.log("detailsProps", detailsFooterProps);
     if (this.props.IndividualColumnFilter) {
       let _renderDetailsFooterItemColumn: IDetailsRowBaseProps['onRenderItemColumn'] = (item, index, column) => {
         let filter: IColumnFilter = this.state.columnFilters.find(colFilter => colFilter.columnName == column.name);
-        if (this.props.IndividualColumnFilter && showSearchBox && column.data != SharePointType.FileIcon) {
-          return (
-            <SearchBox placeholder={column.name} iconProps={filterIcon} value={filter ? filter.filterToApply : ""}
-              underlined={true} onChange={(ev, value) => this.filterColumnListItems(column.name, value, column.data)} onClear={(ev) => this.filterColumnListItems(column.name, "", SharePointType.Text)} />
-          );
+        console.log("this.state.columnFilters", this.state.columnFilters);
+        console.log("column", column);
+        if (this.props.IndividualColumnFilter && showSearchBox) {
+          if (ignoreFiltersFor.indexOf(column.data) == -1) {
+            return (
+              <div className={styles.floatContainer}>
+                {/* <SearchBox placeholder={column.name} iconProps={filterIcon} value={filter ? filter.filterToApply : ""}
+                  underlined={true} onChange={(ev, value) => this.filterColumnListItems(column.name, value, column.data)} onClear={(ev) => this.filterColumnListItems(column.name, "", SharePointType.Text)} className={styles.floatChild} /> */}
+                <label className={styles.floatChild}>{column.name}</label>
+                <button className={styles.filterButton} onClick={() => this.showFilterPanel(column.name)}><Icon iconName='Filter' /></button>
+                <button className={styles.filterButton} onClick={(ev) => this._onColumnClick(ev, column)}><Icon iconName='Sort' /></button>
+              </div>
+            );
+          }
+          else {
+            return (
+              <div className={styles.floatContainer}>
+                <label className={styles.floatChild}>{column.name}</label>
+              </div>
+            );
+          }
         }
         else {
           return undefined;
@@ -364,6 +411,9 @@ export default class IListdSearchWebPart extends React.Component<IListSearchProp
   }
 
   private _checkIndividualFilter(position: string): boolean {
+    console.log("this.props.IndividualColumnFilter", this.props.IndividualColumnFilter);
+    console.log("this.props.IndividualFilterPosition", this.props.IndividualFilterPosition);
+    console.log("this.props.IndividualFilterPosition", this.props.IndividualFilterPosition);
     return this.props.IndividualColumnFilter && this.props.IndividualFilterPosition && this.props.IndividualFilterPosition.indexOf(position) > -1;
   }
 
@@ -853,155 +903,158 @@ export default class IListdSearchWebPart extends React.Component<IListSearchProp
   private GetItemValueFieldByFieldType(item: any, field: string, type: SharePointType, ommitCamlQuery: boolean = false, setGroupByEmptyValue: boolean = false): any {
     let result: any;
     let value = item[field];
-    switch (type) {
-      case SharePointType.FileIcon:
-        {
-          result = item.FileExtension;
-          break;
-        }
-      case SharePointType.Boolean:
-        {
-          if (value) {
-            result = value.toString();
+
+    if (item) {
+      switch (type) {
+        case SharePointType.FileIcon:
+          {
+            result = item.FileExtension;
+            break;
           }
-          break;
-        }
-      case SharePointType.User:
-        {
-          if (this.props.AnyCamlQuery && !ommitCamlQuery) {
-            result = value;
+        case SharePointType.Boolean:
+          {
+            if (value) {
+              result = value.toString();
+            }
+            break;
           }
-          else {
+        case SharePointType.User:
+          {
+            if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+              result = value;
+            }
+            else {
+              if (!isEmpty(value)) {
+                let user: IUserField = { Name: value.Title, Email: StringUtils.GetUserEmail(value.Name) };
+                result = user;
+              }
+            }
+            break;
+          }
+        case SharePointType.Url:
+        case SharePointType.Image:
+          {
             if (!isEmpty(value)) {
-              let user: IUserField = { Name: value.Title, Email: StringUtils.GetUserEmail(value.Name) };
-              result = user;
+              let url: IUrlField = { Url: value.Url, Description: value.Description };
+              result = url;
             }
+            break;
           }
-          break;
-        }
-      case SharePointType.Url:
-      case SharePointType.Image:
-        {
-          if (!isEmpty(value)) {
-            let url: IUrlField = { Url: value.Url, Description: value.Description };
-            result = url;
-          }
-          break;
-        }
-      case SharePointType.UserName:
-        {
-          if (this.props.AnyCamlQuery && !ommitCamlQuery) {
-            result = value;
-          }
-          else {
-            result = value && value.Title;
-          }
-          break;
-        }
-      case SharePointType.UserEmail:
-        {
-          if (this.props.AnyCamlQuery && !ommitCamlQuery) {
-            result = value;
-          }
-          else {
-            result = value && StringUtils.GetUserEmail(value.Name);
-          }
-          break;
-        }
-      case SharePointType.UserMulti:
-        {
-          if (this.props.AnyCamlQuery && !ommitCamlQuery) {
-            result = value ? value.split(';') : "";
-          }
-          else {
-            if (value && value.length > 0) {
-              let personas: IFacepilePersona[] = value.map(user => {
-                let email = StringUtils.GetUserEmail(user.Name);
-                return { imageUrl: email ? `/_layouts/15/userphoto.aspx?UserName=${email}` : undefined, personaName: user.Title, imageInitials: StringUtils.GetUserInitials(user.Title), };
-              });
-              result = personas;
+        case SharePointType.UserName:
+          {
+            if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+              result = value;
             }
-          }
-          break;
-        }
-      case SharePointType.Lookup:
-        {
-          if (this.props.AnyCamlQuery && !ommitCamlQuery) {
-            result = value;
-          }
-          else {
-            result = value && value.Title;
-          }
-          break;
-        }
-      case SharePointType.ChoiceMulti:
-        {
-          if (this.props.AnyCamlQuery && !ommitCamlQuery && value) {
-            result = value ? value.split(',') : "";
-          }
-          else {
-            result = value;
-          }
-          break;
-        }
-      case SharePointType.LookupMulti:
-        {
-          if (this.props.AnyCamlQuery && !ommitCamlQuery && value) {
-            result = value ? value.split(';') : "";
-          }
-          else {
-            result = value && value.map(val => { return val.Title; });
-          }
-          break;
-        }
-      case SharePointType.DateTime:
-        {
-          result = value && new Date(value).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName, {
-            year: "numeric",
-            month: "numeric",
-            day: "2-digit",
-            hour: "2-digit",
-            minute: "2-digit",
-            second: "2-digit",
-          });
-          break;
-        }
-      case SharePointType.Date:
-        {
-          result = value && new Date(value).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName);
-          break;
-        }
-      case SharePointType.DateLongMonth:
-        {
-          result = value && new Date(value).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName, {
-            year: "numeric",
-            month: "long",
-            day: "2-digit"
-          });
-          break;
-        }
-      case SharePointType.Taxonomy:
-        {
-          if (this.props.AnyCamlQuery && !ommitCamlQuery) {
-            result = value;
-          }
-          else {
-            if (value && value.Term) {
-              result = value.Term;
+            else {
+              result = value && value.Title;
             }
+            break;
           }
-          break;
-        }
-      case SharePointType.TaxonomyMulti:
-        {
-          result = value && value.map(tax => { return tax.Label; });
-          break;
-        }
-      default:
-        {
-          result = value;
-          break;
-        }
+        case SharePointType.UserEmail:
+          {
+            if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+              result = value;
+            }
+            else {
+              result = value && StringUtils.GetUserEmail(value.Name);
+            }
+            break;
+          }
+        case SharePointType.UserMulti:
+          {
+            if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+              result = value ? value.split(';') : "";
+            }
+            else {
+              if (value && value.length > 0) {
+                let personas: IFacepilePersona[] = value.map(user => {
+                  let email = StringUtils.GetUserEmail(user.Name);
+                  return { imageUrl: email ? `/_layouts/15/userphoto.aspx?UserName=${email}` : undefined, personaName: user.Title, imageInitials: StringUtils.GetUserInitials(user.Title), };
+                });
+                result = personas;
+              }
+            }
+            break;
+          }
+        case SharePointType.Lookup:
+          {
+            if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+              result = value;
+            }
+            else {
+              result = value && value.Title;
+            }
+            break;
+          }
+        case SharePointType.ChoiceMulti:
+          {
+            if (this.props.AnyCamlQuery && !ommitCamlQuery && value) {
+              result = value ? value.split(',') : "";
+            }
+            else {
+              result = value;
+            }
+            break;
+          }
+        case SharePointType.LookupMulti:
+          {
+            if (this.props.AnyCamlQuery && !ommitCamlQuery && value) {
+              result = value ? value.split(';') : "";
+            }
+            else {
+              result = value && value.map(val => { return val.Title; });
+            }
+            break;
+          }
+        case SharePointType.DateTime:
+          {
+            result = value && new Date(value).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName, {
+              year: "numeric",
+              month: "numeric",
+              day: "2-digit",
+              hour: "2-digit",
+              minute: "2-digit",
+              second: "2-digit",
+            });
+            break;
+          }
+        case SharePointType.Date:
+          {
+            result = value && new Date(value).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName);
+            break;
+          }
+        case SharePointType.DateLongMonth:
+          {
+            result = value && new Date(value).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName, {
+              year: "numeric",
+              month: "long",
+              day: "2-digit"
+            });
+            break;
+          }
+        case SharePointType.Taxonomy:
+          {
+            if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+              result = value;
+            }
+            else {
+              if (value && value.Term) {
+                result = value.Term;
+              }
+            }
+            break;
+          }
+        case SharePointType.TaxonomyMulti:
+          {
+            result = value && value.map(tax => { return tax.Label; });
+            break;
+          }
+        default:
+          {
+            result = value;
+            break;
+          }
+      }
     }
 
     return result || (setGroupByEmptyValue ? strings.GroupByEmptyValue : result);
@@ -1053,13 +1106,417 @@ export default class IListdSearchWebPart extends React.Component<IListSearchProp
 
   }
 
+  private handleFilterCheckboxChange = (e): void => {
+    let newValue = e.target.checked, key = e.target.name;
+    this.selectCheckBox(newValue, key);
+  }
+
+  private selectCheckBox(newValue: any, key: string) {
+    let columnName: string = this.state.filterPanelHeaderText;
+    let copOfFilterColumnData = [...this.state.filterColumnData];
+    let colFilterObj = copOfFilterColumnData.filter(i => i.columnName == columnName);
+
+    if (colFilterObj && colFilterObj.length > 0) {
+      let updateItem: any[] = colFilterObj[0].columnFilter.filter(item => item['key'] == key);
+      if (updateItem && updateItem.length > 0) {
+        updateItem[0].checked = newValue;
+      }
+      this.setState({ filterColumnData: [...copOfFilterColumnData] });
+    }
+  }
+
+  private getQueryResults(items: any, columnName: string, columnType: string, isColumnDataQuery: boolean, checkedFilters?: any) {
+    let result = [];
+    if (checkedFilters) {
+      let emptyIndex = _.indexOf(checkedFilters, "(Empty)");
+      if (emptyIndex != -1) {
+        checkedFilters[emptyIndex] = undefined;
+      }
+    }
+    if (items) {
+      switch (columnType) {
+        case SharePointType.FileIcon:
+          {
+            result = isColumnDataQuery ? [...new Set(items.map(item => item[columnName] ? item[columnName].FileExtension : ""))]
+              :
+              items.filter(item => { return (checkedFilters.indexOf(item[columnName] ? item[columnName].FileExtension : "") !== -1); });
+            break;
+          }
+        case SharePointType.Boolean:
+          {
+            result = isColumnDataQuery ? [...new Set(items.map(item => item[columnName] ? item[columnName].toString() : ""))]
+              :
+              items.filter(item => { return (checkedFilters.indexOf(item[columnName] ? item[columnName].toString() : "") !== -1); });
+
+            break;
+          }
+        case SharePointType.User:
+          {
+            result = isColumnDataQuery ? [...new Set(items.map(item => item[columnName] ? item[columnName].Title : ""))]
+              :
+              items.filter(item => { return (checkedFilters.indexOf(item[columnName] ? item[columnName].Title : "") !== -1); });
+            break;
+          }
+        case SharePointType.Url:
+        case SharePointType.Image:
+          {
+            // if (!isEmpty(value)) {
+            //   let url: IUrlField = { Url: value.Url, Description: value.Description };
+            //   result = url;
+            // }
+            break;
+          }
+        case SharePointType.UserName:
+          {
+            // if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+            //   result = value;
+            // }
+            // else {
+            //   result = value && value.Title;
+            // }
+            break;
+          }
+        case SharePointType.UserEmail:
+          {
+            // if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+            //   result = value;
+            // }
+            // else {
+            //   result = value && StringUtils.GetUserEmail(value.Name);
+            // }
+            break;
+          }
+        case SharePointType.UserMulti:
+          {
+            // if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+            //   result = value ? value.split(';') : "";
+            // }
+            // else {
+            //   if (value && value.length > 0) {
+            //     let personas: IFacepilePersona[] = value.map(user => {
+            //       let email = StringUtils.GetUserEmail(user.Name);
+            //       return { imageUrl: email ? `/_layouts/15/userphoto.aspx?UserName=${email}` : undefined, personaName: user.Title, imageInitials: StringUtils.GetUserInitials(user.Title), };
+            //     });
+            //     result = personas;
+            //   }
+            // }
+            break;
+          }
+        case SharePointType.Lookup:
+          {
+            // if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+            //   result = value;
+            // }
+            // else {
+            //   result = value && value.Title;
+            // }
+            // result = isColumnDataQuery ? [...new Set(items.map(item => item[columnName] ? item[columnName].Title : ""))]
+            //   :
+            //   items.filter(item => { return (checkedFilters.indexOf(item[columnName] ? item[columnName].Title : "") !== -1); });
+            break;
+          }
+        case SharePointType.ChoiceMulti:
+          {
+            if (isColumnDataQuery) {
+              let temp = [];
+              items.map(item => item[columnName] ? item[columnName].map(i => temp.push(i)) : temp.push(""));
+              result = [...new Set(temp)];
+            }
+            else {
+              result = items.filter(item => {
+                return (
+                  checkedFilters.some(checked =>
+                    checked ? (item[columnName] ? item[columnName].indexOf(checked) !== -1 : "")
+                      : (item[columnName] ? "" : item)
+                  )
+                );
+              });
+
+            }
+            break;
+          }
+        case SharePointType.LookupMulti:
+          {
+            // if (this.props.AnyCamlQuery && !ommitCamlQuery && value) {
+            //   result = value ? value.split(';') : "";
+            // }
+            // else {
+            //   result = value && value.map(val => { return val.Title; });
+            // }
+            break;
+          }
+        case SharePointType.DateTime:
+          {
+            result = isColumnDataQuery ? [...new Set(items.map(item => item[columnName] ? new Date(item[columnName]).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName,
+              {
+                year: "numeric",
+                month: "numeric",
+                day: "2-digit",
+                hour: "2-digit",
+                minute: "2-digit",
+                second: "2-digit",
+              }) : ""))]
+              :
+              items.filter(item => {
+                return (checkedFilters.indexOf(item[columnName] ? new Date(item[columnName]).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName,
+                  {
+                    year: "numeric",
+                    month: "numeric",
+                    day: "2-digit",
+                    hour: "2-digit",
+                    minute: "2-digit",
+                    second: "2-digit",
+                  }) : "") !== -1);
+              });
+            break;
+          }
+        case SharePointType.Date:
+          {
+            result = isColumnDataQuery ? [...new Set(items.map(item => item[columnName] ? new Date(item[columnName]).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName) : ""))]
+              :
+              items.filter(item => { return (checkedFilters.indexOf(item[columnName] ? new Date(item[columnName]).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName) : "") !== -1); });
+            break;
+          }
+        case SharePointType.DateLongMonth:
+          {
+            // result = value && new Date(value).toLocaleDateString(this.props.Context.pageContext.cultureInfo.currentCultureName, {
+            //   year: "numeric",
+            //   month: "long",
+            //   day: "2-digit"
+            // });
+            break;
+          }
+        case SharePointType.Taxonomy:
+          {
+            // if (this.props.AnyCamlQuery && !ommitCamlQuery) {
+            //   result = value;
+            // }
+            // else {
+            //   if (value && value.Term) {
+            //     result = value.Term;
+            //   }
+            // }
+            break;
+          }
+        case SharePointType.TaxonomyMulti:
+          {
+            // result = value && value.map(tax => { return tax.Label; });
+            break;
+          }
+        default:
+          {
+            result = isColumnDataQuery ? [...new Set(items.map(item => item[columnName]))]
+              :
+              items.filter(item => { return (checkedFilters.indexOf(item[columnName]) !== -1); });
+            break;
+          }
+      }
+    }
+    return result;
+  }
+
+  private showFilterPanel(columnName: string) {
+    // let dynamicFilters: IFilter[] = this.buildFilterObject(columnName);
+    let dynamicFilters: IFilterItem[] = [], filter: IFilterItem, result: IFilter[];
+    let columnObj: IColumn = this.state.columns.filter(col => col.key == columnName)[0];
+    let availableColumnValues = this.getQueryResults(this.state.filterItems, columnName, columnObj.data, true);
+    let copOfFilterColumnData = [...this.state.filterColumnData];
+    let tagValues : ITag[] = [], tagItem: ITag;
+    console.log("columnObj", columnObj);
+    console.log("this.state.items", this.state.items);
+
+    //(Empty) insert at start
+    let emptyIndex = _.indexOf(availableColumnValues, undefined);
+    if (emptyIndex != -1) {
+      availableColumnValues.splice(emptyIndex, 1);
+      availableColumnValues.unshift(undefined);
+    }
+    else{
+      emptyIndex = _.indexOf(availableColumnValues, "");
+      if (emptyIndex != -1) {
+        availableColumnValues.splice(emptyIndex, 1);
+        availableColumnValues.unshift(undefined);
+      }
+    }
+
+    if (availableColumnValues && availableColumnValues.length > 0) {
+      let colFilterObj = copOfFilterColumnData.filter(i => i.columnName == columnName);
+      if (colFilterObj && colFilterObj.length > 0) {
+        availableColumnValues.map(item => {
+          //if (item && item != "") {
+          let filteredData = colFilterObj[0].columnFilter.filter(obj => obj.key == `${columnName}##${item}`);
+          let currValue = filteredData && filteredData.length > 0 ? filteredData[0].checked : false;
+          filter = {
+            key: `${columnName}##${item}`,
+            fieldName: columnName,
+            option: item && item != "" ? item : "(Empty)",
+            checked: currValue
+          };
+          dynamicFilters.push(filter);
+
+          //Insert into Tag array for Search suggestions
+          tagItem = {
+            key: item,
+            name: item ? item[0].toUpperCase() + item.slice(1) : undefined
+          };
+          tagValues.push(tagItem);
+          //}
+        });
+
+        colFilterObj[0].columnFilter = dynamicFilters;
+      }
+      else {
+        availableColumnValues.map(item => {
+          //if (item && item != "") {
+          filter = {
+            key: `${columnName}##${item}`,
+            fieldName: columnName,
+            option: item && item != "" ? item : "(Empty)",
+            checked: false
+          };
+          dynamicFilters.push(filter);
+
+          //Insert into Tag array for Search suggestions
+          tagItem = {
+            key: item,
+            name: item ? item[0].toUpperCase() + item.slice(1) : undefined
+          };
+          tagValues.push(tagItem);
+          //}
+        });
+
+        copOfFilterColumnData.push({
+          columnName: columnName,
+          columnFilter: dynamicFilters
+        });
+      }
+    }
+    console.log("items", this.state.filterItems);
+    console.log("copOfFilterColumnData", copOfFilterColumnData);
+    this.setState({ showFilterPanel: true, filterPanelHeaderText: columnName, filterColumnData: copOfFilterColumnData, filterSuggestedTags: tagValues });
+  }
+
+  private closeFilterPanel() {
+    this.setState({ showFilterPanel: false, filterPanelHeaderText: "" });
+  }
+
+  private clearFilterClick() {
+    let columnName: string = this.state.filterPanelHeaderText;
+    let copOfFilterColumnData = [...this.state.filterColumnData];
+    let colFilterObj = copOfFilterColumnData.filter(i => i.columnName == columnName);
+    let items = [...this.state.items];
+
+    if (colFilterObj && colFilterObj.length > 0) {
+      let copyOfdynamicFilters = colFilterObj[0].columnFilter.filter(item => item.fieldName == this.state.filterPanelHeaderText);
+      //Set checked to false
+      if (copyOfdynamicFilters && copyOfdynamicFilters.length > 0) {
+        copyOfdynamicFilters.map(item => item.checked = false);
+      }
+      colFilterObj[0].columnFilter = copyOfdynamicFilters;
+
+      this.setState({ filterColumnData: copOfFilterColumnData });
+    }
+  }
+
+  private handleFilterApplyClick() {
+    let columnName: string = this.state.filterPanelHeaderText;
+    let { filterItems, items } = this.state;
+    let copOfFilterColumnData = [...this.state.filterColumnData];
+    let colFilterObj = copOfFilterColumnData.filter(i => i.columnName == columnName);
+    let copyOfItems = [...items];
+    let columnObj: IColumn = this.state.columns.filter(col => col.key == columnName)[0];
+
+    if (filterItems && colFilterObj && filterItems.length > 0 && colFilterObj.length > 0) {
+      let checkedFilters = colFilterObj[0].columnFilter.reduce((a, o) => (o.checked && a.push(o.option), a), []);
+      console.log("checkedFilters", checkedFilters);
+      if (checkedFilters && checkedFilters.length > 0) {
+        //var result = filterItems.filter(item => { return (checkedFilters.indexOf(item[columnName]) !== -1); });
+        var result = this.getQueryResults(filterItems, columnName, columnObj.data, false, checkedFilters);
+        console.log("result", result);
+        this.setState({ filterItems: result, showFilterPanel: false });
+      }
+      else {
+        //Remove Filter data and set items
+        let filteredColData = copOfFilterColumnData.filter(j => j.columnName != columnName);
+        if (filteredColData && filteredColData.length > 0) {
+          filteredColData.forEach(filter => {
+            if (filter && filter.columnFilter.length > 0) {
+              let checkedFilters2 = filter.columnFilter.reduce((a, o) => (o.checked && a.push(o.option), a), []);
+              columnObj = this.state.columns.filter(col => col.key == filter.columnName)[0];
+              console.log("checkedFilters", checkedFilters2);
+              if (checkedFilters2 && checkedFilters2.length > 0) {
+                //var result2 = copyOfItems.filter(item => { return (checkedFilters2.indexOf(item[filter.columnName]) !== -1); });
+                var result2 = this.getQueryResults(copyOfItems, filter.columnName, columnObj.data, false, checkedFilters2);
+                console.log("result", result2);
+                copyOfItems = [...result2];
+              }
+            }
+          });
+          if (copyOfItems && copyOfItems.length > 0) {
+            this.setState({ filterItems: copyOfItems, showFilterPanel: false });
+          }
+          else {
+            this.setState({ filterItems: items, showFilterPanel: false });
+          }
+        }
+        else {
+          this.setState({ filterItems: items, showFilterPanel: false });
+        }
+      }
+    }
+    else {
+      this.setState({ filterItems: items, showFilterPanel: false });
+    }
+  }
+
+  private listContainsTagList = (tag: ITag, tagList?: ITag[]) => {
+    if (!tagList || !tagList.length || tagList.length === 0) {
+      return false;
+    }
+    return tagList.some(compareTag => compareTag.key === tag.key);
+  }
+
+  private OnfilterSuggestedTags = (filterText: string, tagList: ITag[]): ITag[] => {
+    return filterText
+      ? this.state.filterSuggestedTags.filter(
+        tag => tag && tag.name ? tag.name.toLowerCase().indexOf(filterText.toLowerCase()) === 0 && !this.listContainsTagList(tag, tagList) : "",
+      )
+      : [];
+  }
+
+  private getTextFromItem = (item: ITag) => "";
+
+  private onItemSelected = (item: ITag): ITag | null => {
+    if (item && item.name) {
+      let newValue = true, key = this.state.filterPanelHeaderText + "##" + item.name;
+      this.selectCheckBox(newValue, key);
+    }
+    return null;
+  }
 
   public render(): React.ReactElement<IListSearchProps> {
     const { semanticColors }: IReadonlyTheme = this.props.themeVariant;
+    const { showFilterPanel, filterPanelHeaderText, filterColumnData, filterSuggestedTags } = this.state;
     let clearAllButton = this.props.ClearAllFiltersBtnColor == "white" ? <DefaultButton text={this.props.ClearAllFiltersBtnText} className={styles.btn} onClick={(ev) => this._clearAllFilters()} /> :
       <PrimaryButton text={this.props.ClearAllFiltersBtnText} className={styles.btn} onClick={(ev) => this._clearAllFilters()} />;
+    const onRenderFooterContent = () => (
+      <div>
+        <PrimaryButton text='Apply' onClick={() => this.handleFilterApplyClick()} iconProps={{ iconName: 'Filter' }} className="button custButton" />
+        <DefaultButton text='Clear All' onClick={() => this.clearFilterClick()} iconProps={{ iconName: 'Cancel' }} className="button custButton" style={{ marginLeft: "15px" }} />
+      </div>
+    );
+    const rootClass = mergeStyles({
+      marginTop: "1em",
+      maxWidth: 500,
+    });
+    const pickerSuggestionsProps: IBasePickerSuggestionsProps = {
+      suggestionsHeaderText: '',
+      noResultsFoundText: 'No results found',
+    };
     return (
-      <div className={styles.listSearch} style={{ backgroundColor: semanticColors.bodyBackground, color: semanticColors.bodyText }}>
+      <div className={styles.listSearch} style={{
+        backgroundColor: semanticColors.bodyBackground, color: semanticColors.bodyText
+      }}>
         <div className={styles.row}>
           <div className={styles.column}>
             <WebPartTitle title={this.props.title} updateProperty={(value: string) => this.props.updateTitle(value)} displayMode={this.props.displayMode} placeholder={strings.WebPartTitlePlaceHolder}></WebPartTitle>
@@ -1133,6 +1590,50 @@ export default class IListdSearchWebPart extends React.Component<IListSearchProp
                   </div>
                 </div>
               </React.Fragment>}
+            <Panel
+              isLightDismiss
+              isOpen={showFilterPanel}
+              onDismiss={() => this.closeFilterPanel()}
+              closeButtonAriaLabel="Close"
+              headerText={"Filter by Test '" + filterPanelHeaderText + "'"}
+              onRenderFooterContent={onRenderFooterContent}
+              isFooterAtBottom={true}
+            >
+              <div className={rootClass}>
+                <TagPicker
+                  removeButtonAriaLabel="Remove"
+                  onResolveSuggestions={this.OnfilterSuggestedTags}
+                  getTextFromItem={this.getTextFromItem}
+                  pickerSuggestionsProps={pickerSuggestionsProps}
+                  itemLimit={1}
+                  // this option tells the picker's callout to render inline instead of in a new layer
+                  pickerCalloutProps={{ doNotLayer: true }}
+                  onItemSelected={this.onItemSelected}
+                  resolveDelay={700}
+                />
+                <div
+                  // since this example is an inline picker, it needs some forced space below
+                  // so when embedded in the docssite, the dropdown shows up
+                  style={{ height: '1em' }}
+                />
+              </div>
+              {
+                filterColumnData && filterPanelHeaderText && filterColumnData.filter(i => i.columnName == filterPanelHeaderText)[0] ?
+                  filterColumnData.filter(i => i.columnName == filterPanelHeaderText)[0].columnFilter.map((item) => {
+                    return (
+                      <Checkbox
+                        label={item.option}
+                        checked={item.checked}
+                        name={item.key}
+                        onChange={(event) => this.handleFilterCheckboxChange(event)}
+                        styles={{ label: { marginTop: '10px' } }}
+                      />
+                    );
+                  })
+                  :
+                  <MessageBar messageBarType={MessageBarType.warning}><b>No Available data to perform filter operation!!!</b></MessageBar>
+              }
+            </Panel>
           </div>
         </div>
       </div >);
